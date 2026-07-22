@@ -3,7 +3,7 @@
   "appName": "LoanBe Mobile",
   "webDir": "dist",
   "server": {
-    "url": "http://192.168.1.151:5173",
+    "url": "http://172.30.113.90:5173",
     "cleartext": true
   }
 }

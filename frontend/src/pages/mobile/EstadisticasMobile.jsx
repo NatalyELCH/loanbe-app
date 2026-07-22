@@ -31,7 +31,9 @@ import {
   Layers,
   Compass,
   CalendarCheck,
-  Scale
+  Scale,
+  Cpu,
+  GitCommit
 } from "lucide-react";
 
 import API_URL from "../../config";
@@ -99,7 +101,7 @@ function EstadisticasMobile() {
     .filter(t => t.tipo === "prestamo")
     .reduce((a, b) => a + Number(b.monto || 0), 0);
 
-  // Saldo Actual (Ingresos - Gastos o respaldado por el usuario)
+  // Saldo Actual
   const saldoActual = (usuario?.saldo !== undefined) ? Number(usuario.saldo) : (ingresos - gastos);
 
   const totalFlujo = ingresos + gastos + ahorros + prestamos || 1;
@@ -135,6 +137,78 @@ function EstadisticasMobile() {
     const ordenados = Object.values(acumulado);
     return ordenados.length > 0 ? ordenados : [{ name: "Actual", ingresos: ingresos, gastos: gastos, balance: ingresos - gastos }];
   }, [transacciones, ingresos, gastos]);
+
+  // --- MODELO PREDICTIVO: REGRESIÓN LINEAL (Gastos Futuros) ---
+  const prediccionGastosProximoMes = useMemo(() => {
+    const y = datosPorMes.map(d => d.gastos);
+    const n = y.length;
+    if (n === 0) return 0;
+    if (n === 1) return y[0];
+
+    // Regresión lineal simple: y = mx + b (x es el índice del mes 0, 1, 2...)
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    for (let i = 0; i < n; i++) {
+      sumX += i;
+      sumY += y[i];
+      sumXY += i * y[i];
+      sumXX += i * i;
+    }
+
+    const denominator = (n * sumXX - sumX * sumX);
+    if (denominator === 0) return y[n - 1];
+
+    const m = (n * sumXY - sumX * sumY) / denominator;
+    const b = (sumY - m * sumX) / denominator;
+
+    // Predecir para el siguiente índice (n)
+    const proximoValor = m * n + b;
+    return Math.max(0, proximoValor);
+  }, [datosPorMes]);
+
+  // --- MODELO DE MACHINE LEARNING: CLUSTERING K-MEANS (Simplificado en JS para Transacciones) ---
+  const clustersKMeans = useMemo(() => {
+    const montosValidos = transacciones.map(t => Number(t.monto || 0)).filter(m => m > 0);
+    if (montosValidos.length === 0) return { bajos: 0, medios: 0, altos: 0 };
+
+    // Inicializar 3 centroides aproximados basados en Min y Max (K=3: Bajos, Medios, Altos)
+    let min = Math.min(...montosValidos);
+    let max = Math.max(...montosValidos);
+    let c1 = min + (max - min) * 0.2; // Centroide Bajo
+    let c2 = min + (max - min) * 0.5; // Centroide Medio
+    let c3 = min + (max - min) * 0.8; // Centroide Alto
+
+    let clusters = { bajos: 0, medios: 0, altos: 0 };
+
+    // Simular 5 iteraciones de K-Means
+    for (let iter = 0; iter < 5; iter++) {
+      let grupo1 = [], grupo2 = [], grupo3 = [];
+
+      montosValidos.forEach(m => {
+        let d1 = Math.abs(m - c1);
+        let d2 = Math.abs(m - c2);
+        let d3 = Math.abs(m - c3);
+
+        if (d1 <= d2 && d1 <= d3) grupo1.push(m);
+        else if (d2 <= d1 && d2 <= d3) grupo2.push(m);
+        else grupo3.push(m);
+      });
+
+      if (grupo1.length > 0) c1 = grupo1.reduce((a, b) => a + b, 0) / grupo1.length;
+      if (grupo2.length > 0) c2 = grupo2.reduce((a, b) => a + b, 0) / grupo2.length;
+      if (grupo3.length > 0) c3 = grupo3.reduce((a, b) => a + b, 0) / grupo3.length;
+
+      clusters = {
+        bajos: grupo1.length,
+        medios: grupo2.length,
+        altos: grupo3.length,
+        valBajo: c1,
+        valMedio: c2,
+        valAlto: c3
+      };
+    }
+
+    return clusters;
+  }, [transacciones]);
 
   // Datos para Gráfico de Líneas (Evolución Mensual)
   const flujoLinea = {
@@ -272,7 +346,7 @@ function EstadisticasMobile() {
         </h1>
       </div>
 
-      {/* TARJETAS RESUMEN REqueridas */}
+      {/* TARJETAS RESUMEN */}
       <div className="grid grid-cols-2 gap-2.5 mb-4">
         <div className="bg-white rounded-2xl p-3 shadow-xs border border-slate-100 flex items-center gap-3">
           <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl"><Wallet size={18} /></div>
@@ -307,7 +381,7 @@ function EstadisticasMobile() {
         </div>
       </div>
 
-      {/* SECCIÓN ANALÍTICA EXTRA: Balance Financiero Mensual & Comparativa */}
+      {/* SECCIÓN ANALÍTICA EXTRA: Balance & Comparativa */}
       <div className="grid grid-cols-2 gap-2.5 mb-4">
         <div className="bg-white rounded-2xl p-3 shadow-xs border border-slate-100">
           <div className="flex items-center gap-1.5 text-slate-400 mb-1">
@@ -329,6 +403,56 @@ function EstadisticasMobile() {
             {diferenciaBalance >= 0 ? `+${diferenciaBalance.toFixed(2)}` : diferenciaBalance.toFixed(2)}
           </p>
           <span className="text-[9px] text-slate-400">Variación intermensual</span>
+        </div>
+      </div>
+
+      {/* --- NUEVA SECCIÓN: MODELO DE INTELIGENCIA ARTIFICIAL (REGRESIÓN & CLUSTERING) --- */}
+      <div className="grid grid-cols-1 gap-2.5 mb-4">
+        {/* Regresión Lineal (Predicción) */}
+        <div className="bg-gradient-to-br from-[#1e617a] to-[#144356] text-white rounded-3xl p-4 shadow-md">
+          <div className="flex items-center gap-2 mb-2">
+            <Cpu size={18} className="text-cyan-300" />
+            <h2 className="font-bold text-xs uppercase tracking-wider text-cyan-200">Regresión Lineal (Predicción de Gastos)</h2>
+          </div>
+          <div className="flex items-baseline justify-between bg-black/15 p-3 rounded-2xl backdrop-blur-xs mb-2">
+            <div>
+              <span className="text-[10px] text-cyan-100/75 block uppercase font-medium">Gasto estimado próximo mes</span>
+              <span className="text-xl font-black text-white">${prediccionGastosProximoMes.toFixed(2)}</span>
+            </div>
+            <span className="text-[10px] bg-cyan-500/20 text-cyan-200 px-2 py-1 rounded-lg border border-cyan-400/30">Tendencia IA</span>
+          </div>
+          <p className="text-[10px] text-cyan-100/80 leading-relaxed">
+            Modelo matemático que calcula la línea de tendencia de tus gastos históricos para proyectar tu comportamiento financiero futuro.
+          </p>
+        </div>
+
+        {/* Clustering K-Means (Segmentación de Transacciones) */}
+        <div className="bg-white rounded-3xl p-4 shadow-xs border border-slate-100">
+          <div className="flex items-center gap-1.5 mb-2">
+            <GitCommit size={16} className="text-[#1e617a]" />
+            <h2 className="font-bold text-slate-800 text-xs">Clustering K-Means (Segmentación de Movimientos)</h2>
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100 text-center">
+              <span className="text-[9px] text-slate-400 font-bold block uppercase">Bajos (~${(clustersKMeans.valBajo || 0).toFixed(0)})</span>
+              <span className="text-emerald-600 text-base font-black">{clustersKMeans.bajos}</span>
+              <span className="text-[8px] text-slate-400 block">transacciones</span>
+            </div>
+            <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100 text-center">
+              <span className="text-[9px] text-slate-400 font-bold block uppercase">Medios (~${(clustersKMeans.valMedio || 0).toFixed(0)})</span>
+              <span className="text-amber-600 text-base font-black">{clustersKMeans.medios}</span>
+              <span className="text-[8px] text-slate-400 block">transacciones</span>
+            </div>
+            <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-100 text-center">
+              <span className="text-[9px] text-slate-400 font-bold block uppercase">Altos (~${(clustersKMeans.valAlto || 0).toFixed(0)})</span>
+              <span className="text-rose-600 text-base font-black">{clustersKMeans.altos}</span>
+              <span className="text-[8px] text-slate-400 block">transacciones</span>
+            </div>
+          </div>
+          <p className="text-[11px] text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex gap-2 items-start">
+            <Info size={14} className="text-[#1e617a] shrink-0 mt-0.5" />
+            Agrupamiento automatizado (K=3 centroides) que clasifica tus montos en perfiles de impacto financiero.
+          </p>
         </div>
       </div>
 

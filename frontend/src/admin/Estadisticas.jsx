@@ -14,7 +14,12 @@ import {
   Activity,
   Users,
   Percent,
-  RefreshCw
+  RefreshCw,
+  Cpu,
+  GitCommit,
+  Info,
+  Scale,
+  CalendarCheck
 } from "lucide-react";
 
 import {
@@ -104,8 +109,8 @@ function Estadisticas() {
     );
   }, [usuarios]);
 
-  // 📊 RESUMEN BANCO
-  const dataBanco = useMemo(() => {
+  // 📊 RESUMEN DEL SISTEMA
+  const dataSistema = useMemo(() => {
     return transacciones.reduce(
       (acc, t) => {
         const tipo = normalizar(t.tipo);
@@ -122,12 +127,109 @@ function Estadisticas() {
     );
   }, [transacciones]);
 
-  // 💰 SALDO TOTAL DE CLIENTES
+  // 💰 SALDO TOTAL DE USUARIOS
   const saldoUsuarios = useMemo(() => {
     return clientes.reduce((acc, u) => acc + Number(u.saldo || 0), 0);
   }, [clientes]);
 
   const promedioSaldo = clientes.length ? saldoUsuarios / clientes.length : 0;
+
+  // 2. Procesamiento por Meses para Evolución y Modelos IA
+  const mesesNombres = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+  
+  const datosPorMes = useMemo(() => {
+    const acumulado = {};
+    transacciones.forEach(t => {
+      const fecha = new Date(t.createdAt || t.fecha || Date.now());
+      const mesKey = `${fecha.getFullYear()}-${fecha.getMonth()}`;
+      const nombreMes = mesesNombres[fecha.getMonth()];
+      
+      if (!acumulado[mesKey]) {
+        acumulado[mesKey] = { name: nombreMes, ingresos: 0, gastos: 0, balance: 0, volumenTotal: 0 };
+      }
+      
+      const monto = Number(t.monto || 0);
+      acumulado[mesKey].volumenTotal += monto;
+      if (t.tipo === "ingreso") {
+        acumulado[mesKey].ingresos += monto;
+        acumulado[mesKey].balance += monto;
+      } else if (t.tipo === "gasto") {
+        acumulado[mesKey].gastos += monto;
+        acumulado[mesKey].balance -= monto;
+      }
+    });
+
+    const ordenados = Object.values(acumulado);
+    return ordenados.length > 0 ? ordenados : [{ name: "Actual", ingresos: dataSistema.ingresos, gastos: dataSistema.gastos, balance: dataSistema.ingresos - dataSistema.gastos, volumenTotal: dataSistema.ingresos + dataSistema.gastos }];
+  }, [transacciones, dataSistema]);
+
+  // --- MODELO PREDICTIVO: REGRESIÓN LINEAL (Volumen de Operaciones Globales) ---
+  const prediccionVolumenProximoMes = useMemo(() => {
+    const y = datosPorMes.map(d => d.volumenTotal);
+    const n = y.length;
+    if (n === 0) return 0;
+    if (n === 1) return y[0];
+
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    for (let i = 0; i < n; i++) {
+      sumX += i;
+      sumY += y[i];
+      sumXY += i * y[i];
+      sumXX += i * i;
+    }
+
+    const denominator = (n * sumXX - sumX * sumX);
+    if (denominator === 0) return y[n - 1];
+
+    const m = (n * sumXY - sumX * sumY) / denominator;
+    const b = (sumY - m * sumX) / denominator;
+
+    const proximoValor = m * n + b;
+    return Math.max(0, proximoValor);
+  }, [datosPorMes]);
+
+  // --- MODELO DE MACHINE LEARNING: CLUSTERING K-MEANS (Transacciones Globales) ---
+  const clustersKMeans = useMemo(() => {
+    const montosValidos = transacciones.map(t => Number(t.monto || 0)).filter(m => m > 0);
+    if (montosValidos.length === 0) return { bajos: 0, medios: 0, altos: 0 };
+
+    let min = Math.min(...montosValidos);
+    let max = Math.max(...montosValidos);
+    let c1 = min + (max - min) * 0.2; 
+    let c2 = min + (max - min) * 0.5; 
+    let c3 = min + (max - min) * 0.8; 
+
+    let clusters = { bajos: 0, medios: 0, altos: 0 };
+
+    for (let iter = 0; iter < 5; iter++) {
+      let grupo1 = [], grupo2 = [], grupo3 = [];
+
+      montosValidos.forEach(m => {
+        let d1 = Math.abs(m - c1);
+        let d2 = Math.abs(m - c2);
+        let d3 = Math.abs(m - c3);
+
+        if (d1 <= d2 && d1 <= d3) grupo1.push(m);
+        else if (d2 <= d1 && d2 <= d3) grupo2.push(m);
+        else grupo3.push(m);
+      });
+
+      if (grupo1.length > 0) c1 = grupo1.reduce((a, b) => a + b, 0) / grupo1.length;
+      if (grupo2.length > 0) c2 = grupo2.reduce((a, b) => a + b, 0) / grupo2.length;
+      if (grupo3.length > 0) c3 = grupo3.reduce((a, b) => a + b, 0) / grupo3.length;
+
+      clusters = {
+        bajos: grupo1.length,
+        medios: grupo2.length,
+        altos: grupo3.length,
+        valBajo: c1,
+        valMedio: c2,
+        valAlto: c3
+      };
+    }
+
+    return clusters;
+  }, [transacciones]);
 
   // OPCIONES BASE MEJORADAS CON TIPOGRAFÍA MÁS CLARA Y ESPACIADO
   const chartOptionsBase = {
@@ -164,10 +266,10 @@ function Estadisticas() {
       {
         label: "Monto Total ($)",
         data: [
-          dataBanco.ingresos,
-          dataBanco.gastos,
-          dataBanco.ahorros,
-          dataBanco.prestamos,
+          dataSistema.ingresos,
+          dataSistema.gastos,
+          dataSistema.ahorros,
+          dataSistema.prestamos,
         ],
         backgroundColor: ["#10b981", "#ef4444", "#0284c7", "#f59e0b"],
         borderRadius: 10,
@@ -182,10 +284,10 @@ function Estadisticas() {
     datasets: [
       {
         data: [
-          dataBanco.ingresos,
-          dataBanco.gastos,
-          dataBanco.ahorros,
-          dataBanco.prestamos,
+          dataSistema.ingresos,
+          dataSistema.gastos,
+          dataSistema.ahorros,
+          dataSistema.prestamos,
         ],
         backgroundColor: ["#10b981", "#ef4444", "#0284c7", "#f59e0b"],
         borderWidth: 3,
@@ -224,10 +326,10 @@ function Estadisticas() {
       {
         label: "Proporción Financiera",
         data: [
-          dataBanco.ingresos,
-          dataBanco.gastos,
-          dataBanco.ahorros,
-          dataBanco.prestamos,
+          dataSistema.ingresos,
+          dataSistema.gastos,
+          dataSistema.ahorros,
+          dataSistema.prestamos,
         ],
         backgroundColor: "rgba(30, 97, 122, 0.18)",
         borderColor: "#1e617a",
@@ -241,10 +343,10 @@ function Estadisticas() {
   const dataApiladas = {
     labels: ["Consolidado Global"],
     datasets: [
-      { label: "Ingresos", data: [dataBanco.ingresos], backgroundColor: "#10b981" },
-      { label: "Gastos", data: [dataBanco.gastos], backgroundColor: "#ef4444" },
-      { label: "Ahorros", data: [dataBanco.ahorros], backgroundColor: "#0284c7" },
-      { label: "Préstamos", data: [dataBanco.prestamos], backgroundColor: "#f59e0b" },
+      { label: "Ingresos", data: [dataSistema.ingresos], backgroundColor: "#10b981" },
+      { label: "Gastos", data: [dataSistema.gastos], backgroundColor: "#ef4444" },
+      { label: "Ahorros", data: [dataSistema.ahorros], backgroundColor: "#0284c7" },
+      { label: "Préstamos", data: [dataSistema.prestamos], backgroundColor: "#f59e0b" },
     ],
   };
 
@@ -314,7 +416,7 @@ function Estadisticas() {
             Estadísticas Generales del Sistema
           </h1>
           <p className="text-slate-500 text-sm">
-            Monitoreo analítico de balance, distribución de capital y comportamiento de usuarios.
+            Monitoreo analítico de balance, distribución de capital y comportamiento de usuarios en la plataforma.
           </p>
         </div>
 
@@ -333,28 +435,28 @@ function Estadisticas() {
         
         <KpiStat
           title="Ingresos"
-          value={`$${dataBanco.ingresos.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
+          value={`$${dataSistema.ingresos.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
           icon={TrendingUp}
           color="emerald"
         />
 
         <KpiStat
           title="Gastos"
-          value={`$${dataBanco.gastos.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
+          value={`$${dataSistema.gastos.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
           icon={TrendingDown}
           color="rose"
         />
 
         <KpiStat
           title="Ahorros"
-          value={`$${dataBanco.ahorros.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
+          value={`$${dataSistema.ahorros.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
           icon={PiggyBank}
           color="sky"
         />
 
         <KpiStat
           title="Préstamos"
-          value={`$${dataBanco.prestamos.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
+          value={`$${dataSistema.prestamos.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
           icon={Landmark}
           color="amber"
         />
@@ -366,6 +468,73 @@ function Estadisticas() {
           icon={Wallet}
           color="navy"
         />
+
+      </div>
+
+      {/* --- SECCIÓN INTELIGENCIA ARTIFICIAL: REGRESIÓN LINEAL Y CLUSTERING K-MEANS --- */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        {/* Regresión Lineal (Predicción Global) */}
+        <div className="bg-gradient-to-br from-[#1e617a] to-[#144356] text-white p-6 rounded-2xl shadow-md flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2 text-cyan-200 text-xs font-bold uppercase tracking-wider">
+                <Cpu size={16} />
+                <span>Regresión Lineal (Predicción IA)</span>
+              </div>
+              <span className="text-[10px] bg-cyan-500/20 text-cyan-200 px-2.5 py-1 rounded font-semibold border border-cyan-400/30">
+                Tendencia Global
+              </span>
+            </div>
+            <h2 className="text-xl font-extrabold tracking-tight mt-1 mb-2">
+              Volumen Estimado Próximo Mes: ${prediccionVolumenProximoMes.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </h2>
+            <p className="text-xs text-cyan-100/80 leading-relaxed mb-4">
+              Modelo predictivo basado en mínimos cuadrados que analiza el comportamiento histórico de las transacciones acumuladas para proyectar el flujo monetario futuro del sistema de gestión.
+            </p>
+          </div>
+          <div className="bg-black/20 p-3 rounded-xl backdrop-blur-xs flex items-center gap-3">
+            <CalendarCheck size={20} className="text-cyan-300 shrink-0" />
+            <span className="text-[11px] text-cyan-100 font-medium">Proyección automatizada para planificación de liquidez de la plataforma.</span>
+          </div>
+        </div>
+
+        {/* Clustering K-Means (Segmentación de Movimientos Globales) */}
+        <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-bold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
+                <GitCommit size={16} className="text-[#1e617a]" />
+                <span>Clustering K-Means (Segmentación Global)</span>
+              </h2>
+              <span className="text-[10px] bg-slate-100 text-slate-600 px-2.5 py-1 rounded font-semibold">
+                K = 3 Centroides
+              </span>
+            </div>
+            
+            <div className="grid grid-cols-3 gap-3 my-3">
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-center">
+                <span className="text-[10px] text-slate-400 font-bold block uppercase">Bajos (~${(clustersKMeans.valBajo || 0).toFixed(0)})</span>
+                <span className="text-emerald-600 text-lg font-black">{clustersKMeans.bajos}</span>
+                <span className="text-[9px] text-slate-400 block">operaciones</span>
+              </div>
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-center">
+                <span className="text-[10px] text-slate-400 font-bold block uppercase">Medios (~${(clustersKMeans.valMedio || 0).toFixed(0)})</span>
+                <span className="text-amber-600 text-lg font-black">{clustersKMeans.medios}</span>
+                <span className="text-[9px] text-slate-400 block">operaciones</span>
+              </div>
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-center">
+                <span className="text-[10px] text-slate-400 font-bold block uppercase">Altos (~${(clustersKMeans.valAlto || 0).toFixed(0)})</span>
+                <span className="text-rose-600 text-lg font-black">{clustersKMeans.altos}</span>
+                <span className="text-[9px] text-slate-400 block">operaciones</span>
+              </div>
+            </div>
+          </div>
+          <p className="text-[11px] text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex gap-2 items-center">
+            <Info size={14} className="text-[#1e617a] shrink-0" />
+            Clasifica automáticamente todas las transacciones de la plataforma en perfiles de impacto financiero.
+          </p>
+        </div>
 
       </div>
 
@@ -383,7 +552,6 @@ function Estadisticas() {
               USD
             </span>
           </div>
-          {/* ALTURA AUMENTADA A 330px */}
           <div className="h-[330px] w-full">
             <Bar data={dataBarras} options={chartOptionsBase} />
           </div>
@@ -400,7 +568,6 @@ function Estadisticas() {
               Proporción
             </span>
           </div>
-          {/* ALTURA AUMENTADA A 330px */}
           <div className="h-[330px] w-full flex items-center justify-center">
             <Doughnut data={dataDoughnut} options={{ ...chartOptionsBase, cutout: "62%" }} />
           </div>
@@ -419,7 +586,6 @@ function Estadisticas() {
             Flujo Acumulado
           </span>
         </div>
-        {/* ALTURA AUMENTADA A 360px */}
         <div className="h-[360px] w-full">
           <Line data={dataLinea} options={chartOptionsBase} />
         </div>
@@ -433,7 +599,7 @@ function Estadisticas() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-bold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
               <Users size={16} className="text-[#1e617a]" />
-              Top 5: Clientes con Mayor Capital Disponible
+              Top 5: Usuarios con Mayor Capital Disponible
             </h2>
             <span className="text-[10px] bg-sky-50 text-sky-700 px-2.5 py-1 rounded font-semibold">
               Saldo
@@ -455,7 +621,7 @@ function Estadisticas() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-bold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
               <TrendingDown size={16} className="text-rose-500" />
-              Top 5: Clientes con Mayor Nivel de Gastos
+              Top 5: Usuarios con Mayor Nivel de Gastos
             </h2>
             <span className="text-[10px] bg-rose-50 text-rose-700 px-2.5 py-1 rounded font-semibold">
               Egresos

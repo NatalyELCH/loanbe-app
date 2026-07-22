@@ -15,7 +15,10 @@ import {
   CreditCard,
   Building2,
   TrendingUp,
-  PieChart as PieChartIcon
+  PieChart as PieChartIcon,
+  Cpu,
+  Layers,
+  Sparkles
 } from "lucide-react";
 
 import {
@@ -32,7 +35,7 @@ import {
   Legend,
 } from "chart.js";
 
-import { Bar, Line, Radar } from "react-chartjs-2";
+import { Bar, Line, Radar, Scatter, PolarArea } from "react-chartjs-2";
 
 ChartJS.register(
   CategoryScale,
@@ -92,100 +95,216 @@ function Dashboard() {
       return String(id) === String(usuarioSeleccionado);
     });
   }, [transacciones, usuarioSeleccionado]);
-/* =========================================
-    HELPER Y EXPORTACIONES DE REPORTES
-========================================= */
-const obtenerDatosParaExportar = () => {
-  if (!transaccionesFiltradas || transaccionesFiltradas.length === 0) {
-    alert("No hay transacciones disponibles para exportar en este filtro.");
-    return null;
-  }
-  return transaccionesFiltradas.map((t, index) => {
-    // Buscar el nombre del titular considerando varias estructuraciones posibles
-    let nombreUsuario = "N/A";
-    if (typeof t.usuario_id === "object" && t.usuario_id !== null) {
-      nombreUsuario = t.usuario_id.nombre || t.usuario_id.name || t.usuario_id.username || "N/A";
-    } else if (typeof t.usuario === "object" && t.usuario !== null) {
-      nombreUsuario = t.usuario.nombre || t.usuario.name || "N/A";
-    } else if (typeof t.usuario_id === "string") {
-      // Buscar si el ID coincide con alguno de los usuarios de la lista
-      const uEncontrado = usuarios.find((u) => String(u._id) === String(t.usuario_id));
-      if (uEncontrado) nombreUsuario = uEncontrado.nombre;
+
+  /* =========================================
+     MODELOS DE MINERÍA DE DATOS Y MACHINE LEARNING
+  ========================================= */
+
+  // 1. Regresión Lineal por Mínimos Cuadrados (Predicción de Gasto/Flujo)
+  const modeloRegresionLineal = useMemo(() => {
+    const gastosList = transaccionesFiltradas.filter(t => t.tipo === "gasto");
+    if (gastosList.length < 2) return { pendiente: 0, intercepto: 0, prediccionProximoMes: 0, puntos: [], linea: [] };
+
+    const n = gastosList.length;
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+
+    gastosList.forEach((t, index) => {
+      const x = index + 1;
+      const y = Number(t.monto || 0);
+      sumX += x;
+      sumY += y;
+      sumXY += x * y;
+      sumXX += x * x;
+    });
+
+    const pendiente = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX) || 0;
+    const intercepto = (sumY - pendiente * sumX) / n || 0;
+    const prediccionProximoMes = Math.max(0, pendiente * (n + 1) + intercepto);
+
+    const puntos = gastosList.map((t, index) => ({
+      x: index + 1,
+      y: Number(t.monto || 0)
+    }));
+
+    const linea = [
+      { x: 1, y: pendiente * 1 + intercepto },
+      { x: n + 1, y: pendiente * (n + 1) + intercepto }
+    ];
+
+    return { pendiente, intercepto, prediccionProximoMes, puntos, linea };
+  }, [transaccionesFiltradas]);
+
+  // 2. Clustering K-Means Simplificado (K = 3 Centroides: Bajos, Medios, Altos)
+  const modeloKMeans = useMemo(() => {
+    const montos = transaccionesFiltradas.map(t => Number(t.monto || 0));
+    if (montos.length === 0) return { bajos: [], medios: [], altos: [], centroides: { bajo: 0, medio: 0, alto: 0 } };
+
+    const min = Math.min(...montos);
+    const max = Math.max(...montos);
+    let cBajo = min + (max - min) * 0.2;
+    let cMedio = min + (max - min) * 0.5;
+    let cAlto = min + (max - min) * 0.8;
+
+    let clusters = { bajos: [], medios: [], altos: [] };
+
+    for (let iter = 0; iter < 3; iter++) {
+      clusters = { bajos: [], medios: [], altos: [] };
+      montos.forEach(m => {
+        const d1 = Math.abs(m - cBajo);
+        const d2 = Math.abs(m - cMedio);
+        const d3 = Math.abs(m - cAlto);
+
+        if (d1 <= d2 && d1 <= d3) clusters.bajos.push(m);
+        else if (d2 <= d1 && d2 <= d3) clusters.medios.push(m);
+        else clusters.altos.push(m);
+      });
+
+      if (clusters.bajos.length) cBajo = clusters.bajos.reduce((a, b) => a + b, 0) / clusters.bajos.length;
+      if (clusters.medios.length) cMedio = clusters.medios.reduce((a, b) => a + b, 0) / clusters.medios.length;
+      if (clusters.altos.length) cAlto = clusters.altos.reduce((a, b) => a + b, 0) / clusters.altos.length;
     }
 
-    // Buscar la fecha en diferentes formatos de clave (createdAt, fecha, date, created_at)
-    const rawFecha = t.createdAt || t.fecha || t.date || t.created_at;
-    const fechaFormateada = rawFecha ? new Date(rawFecha).toLocaleDateString() : "N/A";
-
     return {
-      "N°": index + 1,
-      "ID Transacción": t._id || "N/A",
-      "Titular / Usuario": nombreUsuario,
-      "Tipo": (t.tipo || "N/A").toUpperCase(),
-      "Categoría": t.categoria || "N/A",
-      "Monto ($)": Number(t.monto || 0),
-      "Fecha": fechaFormateada,
+      bajos: clusters.bajos,
+      medios: clusters.medios,
+      altos: clusters.altos,
+      centroides: { bajo: cBajo, medio: cMedio, alto: cAlto }
     };
-  });
-};
+  }, [transaccionesFiltradas]);
 
-const exportarReporteExcel = () => {
-  const datos = obtenerDatosParaExportar();
-  if (!datos) return;
-  const fechaHoy = new Date().toISOString().split("T")[0];
-  const sufijo = usuarioSeleccionado === "todos" ? "General" : "Cliente";
-  exportarAExcel(datos, `Reporte_Financiero_${sufijo}_${fechaHoy}.xlsx`);
-};
+  // Datos para gráfico Scatter de Regresión Lineal
+  const dataScatterRegresion = {
+    datasets: [
+      {
+        label: 'Gastos Reales (Observaciones)',
+        data: modeloRegresionLineal.puntos,
+        backgroundColor: '#10b981',
+        pointRadius: 6,
+      },
+      {
+        label: 'Línea de Tendencia OLS',
+        data: modeloRegresionLineal.linea,
+        type: 'line',
+        borderColor: '#f59e0b',
+        borderWidth: 3,
+        pointRadius: 0,
+        fill: false,
+      }
+    ]
+  };
 
-const exportarReporteCSV = () => {
-  const datos = obtenerDatosParaExportar();
-  if (!datos) return;
-  const fechaHoy = new Date().toISOString().split("T")[0];
-  const sufijo = usuarioSeleccionado === "todos" ? "General" : "Cliente";
-  exportarACSV(datos, `Reporte_Financiero_${sufijo}_${fechaHoy}.csv`);
-};
+  // Datos para gráfico PolarArea de K-Means
+  const dataKMeansPolar = {
+    labels: ['Impacto Bajo', 'Impacto Medio', 'Impacto Alto'],
+    datasets: [
+      {
+        label: 'Volumen de Clústeres K-Means',
+        data: [
+          modeloKMeans.bajos.length,
+          modeloKMeans.medios.length,
+          modeloKMeans.altos.length
+        ],
+        backgroundColor: [
+          'rgba(16, 185, 129, 0.7)',
+          'rgba(245, 158, 11, 0.7)',
+          'rgba(239, 68, 68, 0.7)'
+        ],
+        borderColor: ['#10b981', '#f59e0b', '#ef4444'],
+        borderWidth: 1,
+      }
+    ]
+  };
 
-const exportarReportePDF = () => {
-  if (!transaccionesFiltradas || transaccionesFiltradas.length === 0) {
-    alert("No hay transacciones disponibles para exportar.");
-    return;
-  }
+  /* =========================================
+      HELPER Y EXPORTACIONES DE REPORTES
+  ========================================= */
+  const obtenerDatosParaExportar = () => {
+    if (!transaccionesFiltradas || transaccionesFiltradas.length === 0) {
+      alert("No hay transacciones disponibles para exportar en este filtro.");
+      return null;
+    }
+    return transaccionesFiltradas.map((t, index) => {
+      let nombreUsuario = "N/A";
+      if (typeof t.usuario_id === "object" && t.usuario_id !== null) {
+        nombreUsuario = t.usuario_id.nombre || t.usuario_id.name || t.usuario_id.username || "N/A";
+      } else if (typeof t.usuario === "object" && t.usuario !== null) {
+        nombreUsuario = t.usuario.nombre || t.usuario.name || "N/A";
+      } else if (typeof t.usuario_id === "string") {
+        const uEncontrado = usuarios.find((u) => String(u._id) === String(t.usuario_id));
+        if (uEncontrado) nombreUsuario = uEncontrado.nombre;
+      }
 
-  const datosFormateados = transaccionesFiltradas.map((t, index) => {
-    // Buscar el nombre del titular
-    let nombreUsuario = "N/A";
-    if (typeof t.usuario_id === "object" && t.usuario_id !== null) {
-      nombreUsuario = t.usuario_id.nombre || t.usuario_id.name || t.usuario_id.username || "N/A";
-    } else if (typeof t.usuario === "object" && t.usuario !== null) {
-      nombreUsuario = t.usuario.nombre || t.usuario.name || "N/A";
-    } else if (typeof t.usuario_id === "string") {
-      const uEncontrado = usuarios.find((u) => String(u._id) === String(t.usuario_id));
-      if (uEncontrado) nombreUsuario = uEncontrado.nombre;
+      const rawFecha = t.createdAt || t.fecha || t.date || t.created_at;
+      const fechaFormateada = rawFecha ? new Date(rawFecha).toLocaleDateString() : "N/A";
+
+      return {
+        "N°": index + 1,
+        "ID Transacción": t._id || "N/A",
+        "Titular / Usuario": nombreUsuario,
+        "Tipo": (t.tipo || "N/A").toUpperCase(),
+        "Categoría": t.categoria || "N/A",
+        "Monto ($)": Number(t.monto || 0),
+        "Fecha": fechaFormateada,
+      };
+    });
+  };
+
+  const exportarReporteExcel = () => {
+    const datos = obtenerDatosParaExportar();
+    if (!datos) return;
+    const fechaHoy = new Date().toISOString().split("T")[0];
+    const sufijo = usuarioSeleccionado === "todos" ? "General" : "Cliente";
+    exportarAExcel(datos, `Reporte_Admin_Mineria_${sufijo}_${fechaHoy}.xlsx`);
+  };
+
+  const exportarReporteCSV = () => {
+    const datos = obtenerDatosParaExportar();
+    if (!datos) return;
+    const fechaHoy = new Date().toISOString().split("T")[0];
+    const sufijo = usuarioSeleccionado === "todos" ? "General" : "Cliente";
+    exportarACSV(datos, `Reporte_Admin_Mineria_${sufijo}_${fechaHoy}.csv`);
+  };
+
+  const exportarReportePDF = () => {
+    if (!transaccionesFiltradas || transaccionesFiltradas.length === 0) {
+      alert("No hay transacciones disponibles para exportar.");
+      return;
     }
 
-    // Buscar la fecha
-    const rawFecha = t.createdAt || t.fecha || t.date || t.created_at;
-    const fechaFormateada = rawFecha ? new Date(rawFecha).toLocaleDateString() : "N/A";
+    const datosFormateados = transaccionesFiltradas.map((t, index) => {
+      let nombreUsuario = "N/A";
+      if (typeof t.usuario_id === "object" && t.usuario_id !== null) {
+        nombreUsuario = t.usuario_id.nombre || t.usuario_id.name || t.usuario_id.username || "N/A";
+      } else if (typeof t.usuario === "object" && t.usuario !== null) {
+        nombreUsuario = t.usuario.nombre || t.usuario.name || "N/A";
+      } else if (typeof t.usuario_id === "string") {
+        const uEncontrado = usuarios.find((u) => String(u._id) === String(t.usuario_id));
+        if (uEncontrado) nombreUsuario = uEncontrado.nombre;
+      }
 
-    return {
-      "N°": index + 1,
-      "Titular": nombreUsuario,
-      "Tipo": (t.tipo || "N/A").toUpperCase(),
-      "Categoría": t.categoria || "N/A",
-      "Monto ($)": `$${Number(t.monto || 0).toFixed(2)}`,
-      "Fecha": fechaFormateada,
-    };
-  });
+      const rawFecha = t.createdAt || t.fecha || t.date || t.created_at;
+      const fechaFormateada = rawFecha ? new Date(rawFecha).toLocaleDateString() : "N/A";
 
-  const fechaHoy = new Date().toISOString().split("T")[0];
-  const sufijo = usuarioSeleccionado === "todos" ? "General" : "Cliente";
+      return {
+        "N°": index + 1,
+        "Titular": nombreUsuario,
+        "Tipo": (t.tipo || "N/A").toUpperCase(),
+        "Categoría": t.categoria || "N/A",
+        "Monto ($)": `$${Number(t.monto || 0).toFixed(2)}`,
+        "Fecha": fechaFormateada,
+      };
+    });
 
-  exportarAPDF(
-    datosFormateados,
-    `Reporte Financiero (${sufijo})`,
-    `Reporte_Financiero_${sufijo}_${fechaHoy}.pdf`
-  );
-};
+    const fechaHoy = new Date().toISOString().split("T")[0];
+    const sufijo = usuarioSeleccionado === "todos" ? "General" : "Cliente";
+
+    exportarAPDF(
+      datosFormateados,
+      `Consola Analítica de Administración (${sufijo})`,
+      `Reporte_Admin_Mineria_${sufijo}_${fechaHoy}.pdf`
+    );
+  };
+
   /* =========================================
       CÁLCULOS Y CONFIGURACIÓN DE GRÁFICOS
   ========================================= */
@@ -205,7 +324,6 @@ const exportarReportePDF = () => {
 
   const saldoSistema = dataSistema.ingresos - dataSistema.gastos;
 
-  // CHART CONFIG: Barras
   const dataBarras = {
     labels: ["Ingresos", "Gastos", "Ahorros", "Préstamos"],
     datasets: [
@@ -219,7 +337,6 @@ const exportarReportePDF = () => {
     ],
   };
 
-  // CHART CONFIG: Línea (Evolución)
   const dataLinea = {
     labels: transaccionesFiltradas.map((_, i) => `Mov ${i + 1}`),
     datasets: [
@@ -242,12 +359,11 @@ const exportarReportePDF = () => {
     ],
   };
 
-  // CHART CONFIG: Radar
   const dataRadar = {
     labels: ["Ingresos", "Gastos", "Ahorros", "Préstamos"],
     datasets: [
       {
-        label: "Balance General",
+        label: "Balance General Admin",
         data: [
           dataSistema.ingresos,
           dataSistema.gastos,
@@ -262,7 +378,6 @@ const exportarReportePDF = () => {
     ],
   };
 
-  // CHART CONFIG: Gastos Estimados (Distribución)
   const dataGastos = useMemo(() => {
     const totalGastos = dataSistema.gastos;
     return {
@@ -318,13 +433,13 @@ const exportarReportePDF = () => {
         <div className="space-y-0.5">
           <div className="flex items-center gap-2 text-xs font-bold text-[#1e617a] tracking-wider uppercase">
             <Building2 size={15} />
-            <span>Consola Financiera LoanBe</span>
+            <span>Panel de Administración — LoanBe Core</span>
           </div>
           <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">
-            Resumen General de Cuentas
+            Consola Analítica y Minería de Datos
           </h1>
           <p className="text-slate-500 text-sm">
-            Monitoreo en tiempo real de operaciones, flujos de caja y estados financieros.
+            Supervisión global del sistema, modelos predictivos y segmentación de cuentas de clientes.
           </p>
         </div>
 
@@ -337,13 +452,13 @@ const exportarReportePDF = () => {
               <Filter size={16} />
             </div>
             <div className="flex flex-col text-left pr-2">
-              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Filtrar Titular</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Auditar Cuenta</span>
               <select
                 value={usuarioSeleccionado}
                 onChange={(e) => setUsuarioSeleccionado(e.target.value)}
                 className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer py-0.5 pr-2"
               >
-                <option value="todos">Todos los Clientes / Cuentas</option>
+                <option value="todos">Todos los Clientes / General</option>
                 {clientes.map((u) => (
                   <option key={u._id} value={u._id}>
                     {u.nombre}
@@ -386,6 +501,43 @@ const exportarReportePDF = () => {
         </div>
       </div>
 
+      {/* MÓDULO DE MINERÍA DE DATOS E INTELIGENCIA ARTIFICIAL (GRÁFICOS EN VEZ DE TEXTO) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        
+        {/* GRÁFICO 1: REGRESIÓN LINEAL (SCATTER PLOT + LÍNEA OLS) */}
+        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm flex flex-col">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-bold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
+              <Cpu size={15} className="text-[#1e617a]" />
+              Regresión Lineal: Predicción de Gastos (OLS)
+            </h2>
+            <span className="text-[10px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded font-semibold flex items-center gap-1">
+              <Sparkles size={10} /> Proyección: {formatCurrency(modeloRegresionLineal.prediccionProximoMes)}
+            </span>
+          </div>
+          <div className="h-[250px] w-full">
+            <Scatter data={dataScatterRegresion} options={chartOptionsBase} />
+          </div>
+        </div>
+
+        {/* GRÁFICO 2: CLUSTERING K-MEANS (POLAR AREA DE CLÚSTERES) */}
+        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm flex flex-col">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-bold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
+              <Layers size={15} className="text-[#1e617a]" />
+              Clustering K-Means ($K=3$ Segmentos)
+            </h2>
+            <span className="text-[10px] bg-sky-50 text-sky-700 px-2 py-0.5 rounded font-semibold">
+              No Supervisado
+            </span>
+          </div>
+          <div className="h-[250px] w-full flex items-center justify-center">
+            <PolarArea data={dataKMeansPolar} options={chartOptionsBase} />
+          </div>
+        </div>
+
+      </div>
+
       {/* BANNER DE BALANCE NETO DESTACADO */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         
@@ -396,10 +548,10 @@ const exportarReportePDF = () => {
           <div className="flex items-center justify-between z-10">
             <span className="text-xs font-semibold uppercase tracking-widest text-emerald-300 flex items-center gap-2">
               <Wallet size={16} />
-              Balance Neto Consolidado
+              Balance Neto Consolidado (Administración)
             </span>
             <span className="text-[11px] bg-white/10 text-white/90 px-3 py-1 rounded-full font-medium border border-white/10">
-              Estado: Disponible
+              Control Global
             </span>
           </div>
 
@@ -408,7 +560,7 @@ const exportarReportePDF = () => {
               {formatCurrency(saldoSistema)}
             </h2>
             <p className="text-xs text-white/70 mt-1 font-normal">
-              Diferencia activa entre ingresos liquidados y gastos operativos registrados.
+              Diferencia activa entre ingresos liquidados y gastos operativos registrados en toda la plataforma.
             </p>
           </div>
 
@@ -417,7 +569,7 @@ const exportarReportePDF = () => {
               <Activity size={15} className="text-emerald-300" />
               <span>Transacciones Auditadas: <strong>{transaccionesFiltradas.length}</strong></span>
             </div>
-            <span className="text-white/60 text-[11px]">LoanBe Core</span>
+            <span className="text-white/60 text-[11px]">LoanBe Admin Console</span>
           </div>
         </div>
 
@@ -437,7 +589,7 @@ const exportarReportePDF = () => {
               {saldoSistema >= 0 ? "Flujo Positivo" : "Déficit Temporal"}
             </span>
             <p className="text-xs text-slate-500 leading-relaxed">
-              El saldo disponible actual permite cubrir los compromisos y obligaciones del periodo sin inconvenientes.
+              El saldo disponible actual permite cubrir los compromisos y obligaciones globales del periodo sin inconvenientes.
             </p>
           </div>
 
